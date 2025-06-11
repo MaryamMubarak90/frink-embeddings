@@ -2,4 +2,4 @@
 
 ### Example usage
 ```shell
-python src/main/py -i <hdt>
+python src/main/py -i <ttl>
