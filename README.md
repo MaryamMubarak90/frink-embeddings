@@ -2,4 +2,5 @@
 
 ### Example usage
 ```shell
-python src/main/py -i <ttl>
+python src/main.py -i <hdt> -c <conf>
+
