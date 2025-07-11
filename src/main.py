@@ -2,9 +2,15 @@ import pathlib
 import logging
 import sys
 import argparse
-from rdflib import Graph
+import yaml
+# from rdflib import Graph
+#from rdflib_hdt import HDTStore
+from rdflib import URIRef
+from rdflib_hdt import HDTDocument
 from sentence_transformers import SentenceTransformer
-# from rdflib import HDTStore
+
+
+triples = []
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -15,23 +21,54 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+# get list of iri types from config file
+def getIriTypes(conf_file):
+    iri_types = ''
+    try:
+        with open(conf_file, 'r') as conf:
+            conf_yaml = yaml.safe_load(conf)
+            iri_types = conf_yaml['iriTypes']
+    except Exception as e:
+        logger.error(f"An error occurred while parsing file {conf_file}: {e}")
+
+    conf.close()
+    return iri_types
+
+# function to determine whether this IRI should
+# be included in list of triple to be embedded
+# this function consults a config file
+# to determine which IRI types to include
+def needsEmbedding(iri_types, predicate):
+    ret = False
+
+    if predicate in iri_types:
+        ret = True
+
+    return ret
 
 # create embeddings from rdf triples
-def main(input_file: pathlib.Path):
-    logger.info(f"input: {input_file}")
+def main(input_file: pathlib.Path, config_file: pathlib.Path):
+    logger.info(f"input: {input_file}  config: {config_file}")
 
-    # store = HDTStore(input_file)
-    # g = Graph(store=store)
-    g = Graph()
+    doc = HDTDocument(str(input_file))
+    #s = HDTStore(str(input_file))
+    #g = Graph(store=s)
+    iri_types = getIriTypes(config_file)
     triples = []
+    triples_iterator, cardinality = doc.search((None, None, None))
     try:
-        # parse the file
-        g.parse(input_file, format="ttl")
-        logger.debug("Triples in the file:\n")
-        for subj, pred, obj in g:
-            logger.debug(f"Subject: {subj}\nPredicate: {pred}\nObject: {obj}\n")
-            triple_str = f"{subj} {pred} {obj}"
-            triples.append(triple_str)
+        for s, p, o in triples_iterator:
+            # The 'p' in (s, p, o) represents the predicate
+            if isinstance(p, URIRef) and needsEmbedding(iri_types, p):
+                triple_str = f"{s} {p} {o}"
+                triples.append(triple_str)
+        # parse the file this example using a Graph
+        #g.parse(input_file, format="hdt")
+        #logger.debug("Triples in the file:\n")
+        #for subj, pred, obj in g:
+            #logger.debug(f"Subject: {subj}\nPredicate: {pred}\nObject: {obj}\n")
+            #triple_str = f"{subj} {pred} {obj}"
+            #triples.append(triple_str)
     except Exception as e:
         logger.error(f"An error occurred while parsing file {input_file}: {e}")
 
@@ -53,7 +90,8 @@ def main(input_file: pathlib.Path):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='frink-embeddings')
-    parser.add_argument('-i', '--input', required=True, type=pathlib.Path, help='An ht file from an rdf graph')
+    parser.add_argument('-i', '--input', required=True, type=pathlib.Path, help='An hdt file from an rdf graph')
+    parser.add_argument('-c', '--conf', required=True, type=pathlib.Path, help='The yaml file for configuration')
     args = parser.parse_args()
 
-    main(args.input)
+    main(args.input, args.conf)
