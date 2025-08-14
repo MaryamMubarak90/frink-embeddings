@@ -170,7 +170,7 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path):
                                      vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE))
             idx = 0
             points = []
-            print(len(sentences_to_embed_dict.items()))
+
             for k, v in sentences_to_embed_dict.items():
                 idx+=1
                 embedding = model.encode(v)
