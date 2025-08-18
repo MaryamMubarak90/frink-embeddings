@@ -5,6 +5,7 @@ irisToEmbed:
     - http://schema.org/name
     - http://purl.org/dc/terms/title
     - http://purl.org/dc/elements/1.1/title
+    - http://www.w3.org/2004/02/skos/core#altLabel
   - subject:
     - http://purl.org/dc/terms/subject
     - https://schema.org/subject

@@ -57,6 +57,14 @@ def getAllIriTypeValues(iri_types):
     return iri_values
 
 
+# counts how many strings in the sentence list match the target string
+def countDuplicates(string_list, target):
+
+    match_count = sum(1 for s in string_list if s.lower() == target.lower())
+
+    return match_count
+
+
 # this function takes a list of dicts and creates
 # another dict that take the format of:
 # <triple subject>: <string - sentence to embed>
@@ -89,9 +97,12 @@ def createSentences(embed_list):
         if labels is not None:
             sentence = labels[0]
             if len(labels) > 1:
-                sentence += f"; {also_str} "
-                for label in labels[1:]:
-                    sentence += f" {label}"
+                # only precede with "also know as" if the reminder of
+                # the labels in the list are not all duplicates
+                if countDuplicates(labels, sentence) != len(labels):
+                    sentence += f"; {also_str} "
+                    for label in labels[1:]:
+                        sentence += f" {label}"
 
         # now append the rest of the predicates
         for value_dict in value:
