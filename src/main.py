@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 import csv
+import json
 import argparse
 import yaml
 from rdflib import URIRef
@@ -19,6 +20,87 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+# create embeddings and write to a csv file
+def saveToCSV(model, input_file, sentences_to_embed_dict):
+    csv_file = ""
+    embedding_list = []
+    try:
+        # create an embedding for each unique subject
+        # and write to the csv file
+        csv_file = os.path.splitext(os.path.basename(input_file))[0] + ".csv"
+        with open(csv_file, "w", newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['iri', 'label', 'embedding'])
+            for k, v in sentences_to_embed_dict.items():
+                embedding = model.encode(v)
+                writer.writerow([k, v, embedding])
+        f.close()
+    except Exception as e:
+        logger.error(f"An error occurred while save embedded data to the csv file:{csv_file} {e}")
+
+# create embeddings and write to a json file that is in
+# a format suitable for uploading into a vector database
+def saveToJSON(model, input_file, sentences_to_embed_dict):
+    json_file = os.path.splitext(os.path.basename(input_file))[0] + ".json"
+    dict_list = []
+    idx = 1
+    try:
+        # create an embedding for each unique subject
+        # and write to the json file
+        for k, v in sentences_to_embed_dict.items():
+            embedding = model.encode(v)
+            embedded_dict = {"id": f"point_{idx}", "vector": embedding.tolist(), "payload": {"iri": k, "label": v}}
+            dict_list.append(embedded_dict)
+            idx += 1
+
+        with open(json_file, 'w') as f:
+            json.dump(dict_list, f, indent=4)  # 'indent=4' for pretty-printing
+
+        f.close()
+    except Exception as e:
+        logger.error(f"An error occurred while saving embedded data to the json file:{json_file} {e}")
+
+# create an embedding for each unique subject
+# and write to a qdrant collection
+def saveToQdrant(model, url, input_file, sentences_to_embed_dict):
+    # connect to Qdrant client
+    try:
+        client = QdrantClient(url=url, timeout=30)
+        # create a collection name
+        collection_name = os.path.splitext(os.path.basename(input_file))[0]
+        if client.collection_exists(collection_name):
+            # collection already exists so notify and exit
+            logger.info(f"Collection '{collection_name}' already exists.")
+            exit(0)
+        else:
+            # collection does not exist - continue to create and populate
+            logger.debug(f"Collection '{collection_name}' does not exist.")
+            client.create_collection(collection_name=collection_name,
+                                     vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE))
+            idx = 0
+            points = []
+
+            for k, v in sentences_to_embed_dict.items():
+                idx += 1
+                embedding = model.encode(v)
+                points.append(
+                    models.PointStruct(
+                        id=idx,  # Unique ID for each point
+                        vector=embedding,
+                        payload={"iri": k, "label": v}  # Add metadata (payload)
+                    )
+                )
+                # batch upserts to avoid timeouts
+                if idx % 1000 == 0:
+                    client.upsert(collection_name=collection_name, points=points)
+                    points = []
+
+            # final upsert
+            client.upsert(collection_name=collection_name, points=points)
+
+    except Exception as e:
+        logger.error(f"An error occurred uploading data to Qdrant:{url}: {e}")
 
 def getIriKeyFromValue(iri_types, iri_type_value):
 
@@ -116,7 +198,7 @@ def createSentences(embed_list):
 
 
 # create embeddings from rdf triples
-def main(input_file: pathlib.Path, config_file: pathlib.Path):
+def main(input_file: pathlib.Path, config_file: pathlib.Path, csv_output, json_output, qdrant_url):
     logger.info(f"input: {input_file}  config: {config_file}")
 
     doc = HDTDocument(str(input_file))
@@ -127,6 +209,7 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path):
 
     sentences_to_embed_dict = {}
     embed_list = []
+    model = None
     triples, cardinality = doc.search((None, None, None))
 
     try:
@@ -148,60 +231,18 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path):
         # load embedding model
         model = SentenceTransformer('all-MiniLM-L6-v2')
         logger.debug("loaded model")
-
-        # create embeddings and write to a csv file
-        # logger.debug("about to encode embeddings")
-        # create an embedding for each unique subject
-        # and write to the csv file
-        # csv_file = os.path.splitext(os.path.basename(input_file))[0] + ".csv"
-        # with open(csv_file, "w", newline='') as f:
-        #     writer = csv.writer(f)
-        #     writer.writerow(['iri', 'embedding'])
-        #     for k, v in sentences_to_embed_dict.items():
-        #         embedding = model.encode(v)
-        #         writer.writerow([k, embedding])
-        # f.close()
-
-        logger.debug("about to encode embeddings")
-
-        # create an embedding for each unique subject
-        # and write to a qdrant collection
-        # now connect to Qdrant client
-        client = QdrantClient(url="http://localhost:6333", timeout=30)
-        # create a collection name
-        collection_name = os.path.splitext(os.path.basename(input_file))[0]
-        if client.collection_exists(collection_name):
-            # collection already exists so notify and exit
-            logger.info(f"Collection '{collection_name}' already exists.")
-            exit(0)
-        else:
-            # collection does not exist - continue to create and populate
-            logger.debug(f"Collection '{collection_name}' does not exist.")
-            client.create_collection(collection_name=collection_name,
-                                     vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE))
-            idx = 0
-            points = []
-
-            for k, v in sentences_to_embed_dict.items():
-                idx+=1
-                embedding = model.encode(v)
-                points.append(
-                    models.PointStruct(
-                        id=idx,  # Unique ID for each point
-                        vector=embedding,
-                        payload={"iri": k}  # Add metadata (payload)
-                    )
-                )
-                # batch upserts to avoid timeouts
-                if idx % 1000 == 0:
-                    client.upsert(collection_name=collection_name, points=points)
-                    points = []
-
-            # final upsert
-            client.upsert(collection_name=collection_name, points=points)
-
     except Exception as e:
-        logger.error(f"An error occurred while embedding triples {input_file}: {e}")
+        logger.error(f"An error occurred while loading the embedding model: {e}")
+
+        # now see how we want to embed and save this data
+    if csv_output:
+        saveToCSV(model, input_file, sentences_to_embed_dict)
+
+    if json_output:
+        saveToJSON(model, input_file, sentences_to_embed_dict)
+
+    if qdrant_url is not None:
+        saveToQdrant(model, qdrant_url, input_file, sentences_to_embed_dict)
 
 
 if __name__ == '__main__':
@@ -209,6 +250,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='frink-embeddings')
     parser.add_argument('-i', '--input', required=True, type=pathlib.Path, help='An hdt file from an rdf graph')
     parser.add_argument('-c', '--conf', required=True, type=pathlib.Path, help='The yaml file for configuration')
+    parser.add_argument('-q', '--qdrant_url', required=False, help='The url for the Qdrant client')
+    parser.add_argument('--csv', action='store_const', const=True, help='Write the output to a csv file')
+    parser.add_argument('--json', action='store_const', const=True, help='Write the output to a json file')
     args = parser.parse_args()
+    if not (args.csv or args.json):
+        parser.error("At least one of --csv or --json is required.")
 
-    main(args.input, args.conf)
+    main(args.input, args.conf, args.csv, args.json, args.qdrant_url)
