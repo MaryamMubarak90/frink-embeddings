@@ -4,6 +4,7 @@ import sys
 import os
 import csv
 import json
+import numpy as np
 import argparse
 import yaml
 from rdflib import URIRef
@@ -34,10 +35,12 @@ def saveToCSV(model, input_file, sentences_to_embed_dict):
             writer.writerow(['iri', 'label', 'embedding'])
             for k, v in sentences_to_embed_dict.items():
                 embedding = model.encode(v)
-                writer.writerow([k, v, embedding])
+                writer.writerow([k, v, np.array2string(embedding, separator=', ').replace('\n', '')]) #.replace('\n', '')])
         f.close()
+        logger.info(f"Saved embeddings to {csv_file}")
     except Exception as e:
         logger.error(f"An error occurred while save embedded data to the csv file:{csv_file} {e}")
+
 
 # create embeddings and write to a json file that is in
 # a format suitable for uploading into a vector database
@@ -50,7 +53,7 @@ def saveToJSON(model, input_file, sentences_to_embed_dict):
         # and write to the json file
         for k, v in sentences_to_embed_dict.items():
             embedding = model.encode(v)
-            embedded_dict = {"id": f"point_{idx}", "vector": embedding.tolist(), "payload": {"iri": k, "label": v}}
+            embedded_dict = {"id": idx, "vector": embedding.tolist(), "payload": {"iri": k, "label": v}}
             dict_list.append(embedded_dict)
             idx += 1
 
@@ -58,6 +61,7 @@ def saveToJSON(model, input_file, sentences_to_embed_dict):
             json.dump(dict_list, f, indent=4)  # 'indent=4' for pretty-printing
 
         f.close()
+        logger.info(f"Saved embeddings to {json_file}")
     except Exception as e:
         logger.error(f"An error occurred while saving embedded data to the json file:{json_file} {e}")
 
@@ -98,6 +102,7 @@ def saveToQdrant(model, url, input_file, sentences_to_embed_dict):
 
             # final upsert
             client.upsert(collection_name=collection_name, points=points)
+            logger.info(f"Saved embeddings to Qdrant collection '{collection_name}'.")
 
     except Exception as e:
         logger.error(f"An error occurred uploading data to Qdrant:{url}: {e}")
@@ -254,7 +259,7 @@ if __name__ == '__main__':
     parser.add_argument('--csv', action='store_const', const=True, help='Write the output to a csv file')
     parser.add_argument('--json', action='store_const', const=True, help='Write the output to a json file')
     args = parser.parse_args()
-    if not (args.csv or args.json):
-        parser.error("At least one of --csv or --json is required.")
+    if not (args.csv or args.json or args.qdrant_url):
+        parser.error("At least one of --csv, --json or --qdrant_url is required.")
 
     main(args.input, args.conf, args.csv, args.json, args.qdrant_url)
