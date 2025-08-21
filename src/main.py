@@ -58,7 +58,7 @@ def saveToJSON(model, input_file, sentences_to_embed_dict):
             idx += 1
 
         with open(json_file, 'w') as f:
-            json.dump(dict_list, f, indent=4)  # 'indent=4' for pretty-printing
+            json.dump({'points': dict_list}, f, indent=3)
 
         f.close()
         logger.info(f"Saved embeddings to {json_file}")
