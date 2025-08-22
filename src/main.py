@@ -22,24 +22,24 @@ logging.basicConfig(
     ]
 )
 
-# create embeddings and write to a csv file
-def saveToCSV(model, input_file, sentences_to_embed_dict):
-    csv_file = ""
+# create embeddings and write to a tsv file
+def saveToTSV(model, input_file, sentences_to_embed_dict):
+    tsv_file = ""
     embedding_list = []
     try:
         # create an embedding for each unique subject
-        # and write to the csv file
-        csv_file = os.path.splitext(os.path.basename(input_file))[0] + ".csv"
-        with open(csv_file, "w", newline='') as f:
-            writer = csv.writer(f)
+        # and write to the tsv file
+        tsv_file = os.path.splitext(os.path.basename(input_file))[0] + ".tsv"
+        with open(tsv_file, "w", newline='') as f:
+            writer = csv.writer(f, delimiter='\t')
             writer.writerow(['iri', 'label', 'embedding'])
             for k, v in sentences_to_embed_dict.items():
                 embedding = model.encode(v)
-                writer.writerow([k, v, np.array2string(embedding, separator=', ').replace('\n', '')]) #.replace('\n', '')])
+                writer.writerow([k, v, np.array2string(embedding, separator=', ').replace('\n', '')])
         f.close()
-        logger.info(f"Saved embeddings to {csv_file}")
+        logger.info(f"Saved embeddings to {tsv_file}")
     except Exception as e:
-        logger.error(f"An error occurred while save embedded data to the csv file:{csv_file} {e}")
+        logger.error(f"An error occurred while save embedded data to the tsv file:{tsv_file} {e}")
 
 
 # create embeddings and write to a json file that is in
@@ -203,7 +203,7 @@ def createSentences(embed_list):
 
 
 # create embeddings from rdf triples
-def main(input_file: pathlib.Path, config_file: pathlib.Path, csv_output, json_output, qdrant_url):
+def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_output, qdrant_url):
     logger.info(f"input: {input_file}  config: {config_file}")
 
     doc = HDTDocument(str(input_file))
@@ -240,8 +240,8 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path, csv_output, json_o
         logger.error(f"An error occurred while loading the embedding model: {e}")
 
         # now see how we want to embed and save this data
-    if csv_output:
-        saveToCSV(model, input_file, sentences_to_embed_dict)
+    if tsv_output:
+        saveToTSV(model, input_file, sentences_to_embed_dict)
 
     if json_output:
         saveToJSON(model, input_file, sentences_to_embed_dict)
@@ -256,10 +256,10 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--input', required=True, type=pathlib.Path, help='An hdt file from an rdf graph')
     parser.add_argument('-c', '--conf', required=True, type=pathlib.Path, help='The yaml file for configuration')
     parser.add_argument('-q', '--qdrant_url', required=False, help='The url for the Qdrant client')
-    parser.add_argument('--csv', action='store_const', const=True, help='Write the output to a csv file')
+    parser.add_argument('--tsv', action='store_const', const=True, help='Write the output to a tsv file')
     parser.add_argument('--json', action='store_const', const=True, help='Write the output to a json file')
     args = parser.parse_args()
-    if not (args.csv or args.json or args.qdrant_url):
-        parser.error("At least one of --csv, --json or --qdrant_url is required.")
+    if not (args.tsv or args.json or args.qdrant_url):
+        parser.error("At least one of --tsv, --json or --qdrant_url is required.")
 
-    main(args.input, args.conf, args.csv, args.json, args.qdrant_url)
+    main(args.input, args.conf, args.tsv, args.json, args.qdrant_url)
