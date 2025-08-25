@@ -14,4 +14,4 @@ options:
   -q QDRANT_URL, --qdrant_url QDRANT_URL
                         The url for the Qdrant client
   --csv                 Write the output to a csv file
-  --json                Write the output to a json file
+  --json                Write the output to a json file formatted for Qdrant upload
