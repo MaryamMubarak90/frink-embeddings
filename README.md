@@ -13,5 +13,5 @@ options:
   -c CONF, --conf CONF  The yaml file for configuration
   -q QDRANT_URL, --qdrant_url QDRANT_URL
                         The url for the Qdrant client
-  --csv                 Write the output to a csv file
+  --tsv                 Write the output to a tsv file
   --json                Write the output to a json file formatted for Qdrant upload
