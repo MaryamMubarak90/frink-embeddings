@@ -184,12 +184,13 @@ def createSentences(embed_list):
         if labels is not None:
             sentence = labels[0]
             if len(labels) > 1:
-                # only precede with "also know as" if the reminder of
+                # only precede with "also known as" if the reminder of
                 # the labels in the list are not all duplicates
                 if countDuplicates(labels, sentence) != len(labels):
-                    sentence += f"; {also_str} "
+                    sentence += f"; {also_str}"
                     for label in labels[1:]:
-                        sentence += f" {label}"
+                        if label not in sentence:  # issue 9 - only add labels that don't match what is already in the sentence
+                            sentence += f" {label}"
 
         # now append the rest of the predicates
         for value_dict in value:
