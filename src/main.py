@@ -45,6 +45,7 @@ def saveToTSV(model, input_file, sentences_to_embed_dict):
 # create embeddings and write to a json file that is in
 # a format suitable for uploading into a vector database
 def saveToJSON(model, input_file, sentences_to_embed_dict):
+    graph_name = os.path.splitext(os.path.basename(input_file))[0]
     json_file = os.path.splitext(os.path.basename(input_file))[0] + ".json"
     dict_list = []
     idx = 1
@@ -53,7 +54,7 @@ def saveToJSON(model, input_file, sentences_to_embed_dict):
         # and write to the json file
         for k, v in sentences_to_embed_dict.items():
             embedding = model.encode(v)
-            embedded_dict = {"id": idx, "vector": embedding.tolist(), "payload": {"iri": k, "label": v}}
+            embedded_dict = {"id": idx, "vector": embedding.tolist(), "payload": {"graph": graph_name, "iri": k, "label": v}}
             dict_list.append(embedded_dict)
             idx += 1
 
@@ -92,7 +93,7 @@ def saveToQdrant(model, url, input_file, sentences_to_embed_dict):
                     models.PointStruct(
                         id=idx,  # Unique ID for each point
                         vector=embedding,
-                        payload={"iri": k, "label": v}  # Add metadata (payload)
+                        payload = {"graph": collection_name, "iri": k, "label": v}  # Add metadata (payload)
                     )
                 )
                 # batch upserts to avoid timeouts
@@ -175,13 +176,13 @@ def createSentences(embed_list):
     # now create sentence to embed for each subject (s)
     also_str = "also known as"
     for key, value in sentence_dict.items():
-        sentence = None
+        sentence = ""
 
         # special case - don't add the key for labels
         # use following for testing
         # val = [{'label': 'HELLO'},{'description': 'WHEEEEE!'},{'subject': 'HELLO'},{'subject': 'ERS-1 Gridded Level 3 Enhanced Resolution Sigma-0 from BYU'},{'label': 'ERS-1_BYU_L3_OW_SIGMA0_ENHANCED'}]
         labels = [d["label"] for d in value if "label" in d]
-        if labels is not None:
+        if labels is not None and len(labels) > 0:
             sentence = labels[0]
             if len(labels) > 1:
                 # only precede with "also known as" if the reminder of
