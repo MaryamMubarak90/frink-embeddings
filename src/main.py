@@ -11,6 +11,8 @@ from rdflib import URIRef
 from rdflib_hdt import HDTDocument
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient, models
+from type_features import build_text_with_types
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -23,88 +25,117 @@ logging.basicConfig(
 )
 
 # create embeddings and write to a tsv file
-def saveToTSV(model, input_file, sentences_to_embed_dict):
+def saveToTSV(model, input_file, sentences_to_embed_dict, args, types_by_subject):
     tsv_file = ""
-    embedding_list = []
     try:
-        # create an embedding for each unique subject
-        # and write to the tsv file
         tsv_file = os.path.splitext(os.path.basename(input_file))[0] + ".tsv"
         with open(tsv_file, "w", newline='') as f:
             writer = csv.writer(f, delimiter='\t')
             writer.writerow(['iri', 'label', 'embedding'])
             for k, v in sentences_to_embed_dict.items():
+                # type-aware hook (inside the loop)
+                if args.type_aware:
+                    type_terms = types_by_subject.get(k, [])
+                    v = build_text_with_types(
+                        label_text=v,
+                        type_terms=type_terms,
+                        mode=args.type_mode,
+                        max_types=args.max_types,
+                    )
+                # end hook
+
                 embedding = model.encode(v)
                 writer.writerow([k, v, np.array2string(embedding, separator=', ').replace('\n', '')])
-        f.close()
+
         logger.info(f"Saved embeddings to {tsv_file}")
     except Exception as e:
-        logger.error(f"An error occurred while save embedded data to the tsv file:{tsv_file} {e}")
+        logger.error(f"An error occurred while saving embedded data to the tsv file:{tsv_file} {e}")
 
 
 # create embeddings and write to a json file that is in
 # a format suitable for uploading into a vector database
-def saveToJSON(model, input_file, sentences_to_embed_dict):
+def saveToJSON(model, input_file, sentences_to_embed_dict, args, types_by_subject):
     graph_name = os.path.splitext(os.path.basename(input_file))[0]
     json_file = os.path.splitext(os.path.basename(input_file))[0] + ".json"
     dict_list = []
     idx = 1
     try:
-        # create an embedding for each unique subject
-        # and write to the json file
         for k, v in sentences_to_embed_dict.items():
+            # type-aware hook (inside the loop)
+            if args.type_aware:
+                type_terms = types_by_subject.get(k, [])
+                v = build_text_with_types(
+                    label_text=v,
+                    type_terms=type_terms,
+                    mode=args.type_mode,
+                    max_types=args.max_types,
+                )
+            # end hook
+
             embedding = model.encode(v)
-            embedded_dict = {"id": idx, "vector": embedding.tolist(), "payload": {"graph": graph_name, "iri": k, "label": v}}
+            embedded_dict = {
+                "id": idx,
+                "vector": embedding.tolist(),
+                "payload": {"graph": graph_name, "iri": k, "label": v}
+            }
             dict_list.append(embedded_dict)
             idx += 1
 
         with open(json_file, 'w') as f:
             json.dump({'points': dict_list}, f, indent=3)
 
-        f.close()
         logger.info(f"Saved embeddings to {json_file}")
     except Exception as e:
         logger.error(f"An error occurred while saving embedded data to the json file:{json_file} {e}")
 
+
 # create an embedding for each unique subject
 # and write to a qdrant collection
-def saveToQdrant(model, url, input_file, sentences_to_embed_dict):
-    # connect to Qdrant client
+def saveToQdrant(model, url, input_file, sentences_to_embed_dict, args, types_by_subject):
     try:
         client = QdrantClient(url=url, timeout=30)
-        # create a collection name
         collection_name = os.path.splitext(os.path.basename(input_file))[0]
         if client.collection_exists(collection_name):
-            # collection already exists so notify and exit
             logger.info(f"Collection '{collection_name}' already exists.")
             exit(0)
         else:
-            # collection does not exist - continue to create and populate
             logger.debug(f"Collection '{collection_name}' does not exist.")
-            client.create_collection(collection_name=collection_name,
-                                     vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE))
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
+            )
             idx = 0
             points = []
 
             for k, v in sentences_to_embed_dict.items():
                 idx += 1
+
+                # type-aware hook (inside the loop)
+                if args.type_aware:
+                    type_terms = types_by_subject.get(k, [])
+                    v = build_text_with_types(
+                        label_text=v,
+                        type_terms=type_terms,
+                        mode=args.type_mode,
+                        max_types=args.max_types,
+                    )
+                # end hook
+
                 embedding = model.encode(v)
                 points.append(
                     models.PointStruct(
-                        id=idx,  # Unique ID for each point
+                        id=idx,
                         vector=embedding,
-                        payload = {"graph": collection_name, "iri": k, "label": v}  # Add metadata (payload)
+                        payload={"graph": collection_name, "iri": k, "label": v}
                     )
                 )
-                # batch upserts to avoid timeouts
+
                 if idx % 1000 == 0:
                     client.upsert(collection_name=collection_name, points=points)
                     points = []
 
-            # final upsert
             client.upsert(collection_name=collection_name, points=points)
             logger.info(f"Saved embeddings to Qdrant collection '{collection_name}'.")
-
     except Exception as e:
         logger.error(f"An error occurred uploading data to Qdrant:{url}: {e}")
 
@@ -151,6 +182,21 @@ def countDuplicates(string_list, target):
     match_count = sum(1 for s in string_list if s.lower() == target.lower())
 
     return match_count
+
+
+# Build a map: subject IRI -> list of "type" terms found in embed_list
+def buildTypesMap(embed_list):
+    types_by_subject = {}
+    # We look for items whose config_key represents a "type" predicate
+    TYPE_KEYS = {"type", "rdf_type", "rdf:type"}  # adjust if YAML uses another key
+    for item in embed_list:
+        key = item.get('config_key')
+        if key in TYPE_KEYS:
+            subj = item.get('subject')
+            obj  = item.get('object')
+            if subj is not None and obj is not None:
+                types_by_subject.setdefault(subj, []).append(str(obj))
+    return types_by_subject
 
 
 # this function takes a list of dicts and creates
@@ -205,7 +251,8 @@ def createSentences(embed_list):
 
 
 # create embeddings from rdf triples
-def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_output, qdrant_url):
+def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_output, qdrant_url, args):
+
     logger.info(f"input: {input_file}  config: {config_file}")
 
     doc = HDTDocument(str(input_file))
@@ -230,6 +277,8 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_o
 
         # now create a list of sentences to embed
         sentences_to_embed_dict = createSentences(embed_list)
+        # Build subject -> [type terms] map for type-aware text composition
+        types_by_subject = buildTypesMap(embed_list)
 
 
     except Exception as e:
@@ -243,13 +292,14 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_o
 
         # now see how we want to embed and save this data
     if tsv_output:
-        saveToTSV(model, input_file, sentences_to_embed_dict)
+        saveToTSV(model, input_file, sentences_to_embed_dict, args, types_by_subject)
 
     if json_output:
-        saveToJSON(model, input_file, sentences_to_embed_dict)
+        saveToJSON(model, input_file, sentences_to_embed_dict, args, types_by_subject)
 
     if qdrant_url is not None:
-        saveToQdrant(model, qdrant_url, input_file, sentences_to_embed_dict)
+        saveToQdrant(model, qdrant_url, input_file, sentences_to_embed_dict, args, types_by_subject)
+
 
 
 if __name__ == '__main__':
@@ -260,8 +310,24 @@ if __name__ == '__main__':
     parser.add_argument('-q', '--qdrant_url', required=False, help='The url for the Qdrant client')
     parser.add_argument('--tsv', action='store_const', const=True, help='Write the output to a tsv file')
     parser.add_argument('--json', action='store_const', const=True, help='Write the output to a json file')
+    
+    
+    parser.add_argument("--type-aware", action="store_true", help="Turn on type-aware composition of the embedding text (default: off)" )
+    parser.add_argument(
+    "--type-mode",
+    choices=["prefix", "suffix", "bag"],
+    default="prefix",
+    help="How to attach type tokens relative to the label (default: prefix)"
+    )
+    parser.add_argument(
+    "--max-types",
+    type=int,
+    default=3,
+    help="Max number of type tokens to include (default: 3)"
+    )
+
     args = parser.parse_args()
     if not (args.tsv or args.json or args.qdrant_url):
         parser.error("At least one of --tsv, --json or --qdrant_url is required.")
 
-    main(args.input, args.conf, args.tsv, args.json, args.qdrant_url)
+    main(args.input, args.conf, args.tsv, args.json, args.qdrant_url, args)
