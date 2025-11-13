@@ -1,10 +1,19 @@
 #How to Run
 
-# Original behavior (no types): python main.py -i graph_name.hdt -c config.yaml --json
+# Original behavior (no types):  
+"""python src/main.py \
+  -i dreamkg.hdt \
+  -c config.yaml \
+  --json"""
 
-# For new behavior (Type-aware): python main.py -i graph_name.hdt -c config.yaml --json \ --type-aware --types-json subject_types.json --max-types 3
 
-# "subject_types.json" file represents a mapping from each subject IRI towards RDF graph to the list of type IRIs that describe what that subject “is an instance of.” It is used only when we enable --type-aware, so the script can append type information in natural language form.
+# For new behavior (Type-aware): 
+""" python /Users/maryammubarak/Desktop/frink-embeddings-main-typeAware/src/main.py \ 
+  -i dreamkg.hdt \
+  -c /Users/maryammubarak/Desktop/frink-embeddings-main-typeAware/conf/config.yaml \
+  --json \
+  --type-aware \
+  --max-types 2 """
 
 
 import pathlib
@@ -33,6 +42,10 @@ logging.basicConfig(
     ]
 )
 
+# RDF type IRI for pulling types directly from HDT
+RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+
+
 def iri_tail(iri: str) -> str:
     """Return a readable tail from an IRI/URI for fallback labeling."""
     if not iri:
@@ -40,6 +53,7 @@ def iri_tail(iri: str) -> str:
     tail = iri.rsplit("/", 1)[-1]
     tail = tail.rsplit("#", 1)[-1]
     return tail
+
 
 def prettify_from_iri(iri: str) -> str:
     """
@@ -69,8 +83,10 @@ def prettify_from_iri(iri: str) -> str:
     label = " ".join(out).strip()
     return label or iri
 
+
 def normalize_label(s: Optional[str]) -> str:
     return (s or "").strip()
+
 
 def english_with_types(
     label_text: str,
@@ -81,32 +97,28 @@ def english_with_types(
     Single, English-style phrasing for type-aware context (per review):
       "<label>, an instance of <type>"
       "<label>, an instance of <type1>; <type2>; ..."
-    If a type looks like an IRI, render a readable label from its tail.
+    Here we follow Jim's example and use the raw type IRIs in the phrase.
     """
     label_text = normalize_label(label_text)
-    terms = list(type_terms or [])
+
+    # Clean and keep only non-empty type strings
+    terms = [
+        (t or "").strip()
+        for t in (type_terms or [])
+        if (t or "").strip()
+    ]
     if not terms:
         return label_text
 
     if max_types is not None and max_types >= 0:
         terms = terms[:max_types]
 
-    rendered: List[str] = []
-    for t in terms:
-        t = (t or "").strip()
-        if not t:
-            continue
-        if t.startswith("http://") or t.startswith("https://"):
-            rendered.append(prettify_from_iri(t))
-        else:
-            rendered.append(t)
+    if len(terms) == 1:
+        return f"{label_text}, an instance of {terms[0]}"
 
-    if not rendered:
-        return label_text
+    return f"{label_text}, an instance of " + "; ".join(terms)
 
-    if len(rendered) == 1:
-        return f"{label_text}, an instance of {rendered[0]}"
-    return f"{label_text}, an instance of " + "; ".join(rendered)
+
 
 # create embeddings and write to a tsv file
 def saveToTSV(model, input_file, sentences_to_embed_dict):
@@ -124,6 +136,7 @@ def saveToTSV(model, input_file, sentences_to_embed_dict):
         logger.info(f"Saved embeddings to {tsv_file}")
     except Exception as e:
         logger.error(f"An error occurred while save embedded data to the tsv file:{tsv_file} {e}")
+
 
 # create embeddings and write to a json file suitable for uploading into a vector database
 def saveToJSON(model, input_file, sentences_to_embed_dict):
@@ -149,6 +162,7 @@ def saveToJSON(model, input_file, sentences_to_embed_dict):
         logger.info(f"Saved embeddings to {json_file}")
     except Exception as e:
         logger.error(f"An error occurred while saving embedded data to the json file:{json_file} {e}")
+
 
 # create an embedding for each unique subject and write to a qdrant collection
 def saveToQdrant(model, url, input_file, sentences_to_embed_dict):
@@ -189,12 +203,14 @@ def saveToQdrant(model, url, input_file, sentences_to_embed_dict):
     except Exception as e:
         logger.error(f"An error occurred uploading data to Qdrant:{url}: {e}")
 
+
 def getIriKeyFromValue(iri_types, iri_type_value):
     for iris in iri_types:
         for key, value in iris.items():
             if isinstance(value, list) and iri_type_value in value:
                 return key
     return None
+
 
 # get list of iri types from config file
 def getIriTypes(conf_file):
@@ -208,6 +224,7 @@ def getIriTypes(conf_file):
         logger.error(f"An error occurred while parsing file {conf_file}: {e}")
     return iri_types
 
+
 def getAllIriTypeValues(iri_types):
     iri_values = []
     for t in iri_types:
@@ -215,9 +232,11 @@ def getAllIriTypeValues(iri_types):
         iri_values += value_list
     return iri_values
 
+
 # counts how many strings in the sentence list match the target string
 def countDuplicates(string_list, target):
     return sum(1 for s in string_list if s.lower() == target.lower())
+
 
 def createSentences(
     embed_list: List[Dict[str, str]],
@@ -281,15 +300,23 @@ def createSentences(
                     if lab and lab not in sentence:
                         sentence += f" {lab}"
 
-        # Append the rest of the predicates (non-label keys)
+        # Append the rest of the predicates (non-label keys).
+        # IMPORTANT: when type-aware is enabled, we *skip* "type"
+        # here so it is not duplicated (it's already in "an instance of ...").
         for value_dict in kv_list:
             for k, v in value_dict.items():
-                if k != "label":
-                    sentence += f"; {k}: {v}"
+                if k == "label":
+                    continue
+                if type_aware and k == "type":
+                    # avoid a second "type: ..." clause when we're already
+                    # including types via english_with_types
+                    continue
+                sentence += f"; {k}: {v}"
 
         sentences_to_embed_dict[subj] = sentence
 
     return sentences_to_embed_dict
+
 
 
 def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_output, qdrant_url,
@@ -305,20 +332,42 @@ def main(input_file: pathlib.Path, config_file: pathlib.Path, tsv_output, json_o
     embed_list: List[Dict[str, str]] = []
     sentences_to_embed_dict: Dict[str, str] = {}
     model = None
-    triples, cardinality = doc.search((None, None, None))
 
-    # Optional types map (subject IRI -> [types]) for type-aware phrasing
-    types_by_subject: Optional[Dict[str, List[str]]] = None
+    # collect rdf:type triples from HDT into a dict
+ 
+    types_by_subject: Dict[str, List[str]] = {}
+    try:
+        triples_type, _ = doc.search((None, URIRef(RDF_TYPE), None))
+        for s, p, o in triples_type:
+            subj = str(s)
+            typ = str(o)
+            types_by_subject.setdefault(subj, []).append(typ)
+        logger.info(f"Collected rdf:type for {len(types_by_subject)} subjects from HDT.")
+    except Exception as e:
+        logger.error(f"Error collecting rdf:type from HDT: {e}")
+
+    # Optional: merge user-provided types JSON on top
     if types_json is not None and types_json.exists():
         try:
-            types_by_subject = json.loads(types_json.read_text(encoding="utf-8"))
-            logger.info(f"Loaded types map from {types_json} with {len(types_by_subject)} subjects.")
+            user_types = json.loads(types_json.read_text(encoding="utf-8"))
+            merged_count = 0
+            for subj, tlist in user_types.items():
+                if not tlist:
+                    continue
+                types_by_subject.setdefault(subj, [])
+                existing = set(types_by_subject[subj])
+                for t in tlist:
+                    if t not in existing:
+                        types_by_subject[subj].append(t)
+                        existing.add(t)
+                        merged_count += 1
+            logger.info(f"Merged types from {types_json} into HDT-derived types (added {merged_count} entries).")
         except Exception as e:
             logger.error(f"Failed to read types JSON {types_json}: {e}")
-            types_by_subject = None
 
+    # Collect triples according to config predicates
     try:
-        # Collect triples according to config predicates
+        triples, cardinality = doc.search((None, None, None))
         for s, p, o in triples:
             if str(p) in iri_values and isinstance(p, URIRef):
                 key = getIriKeyFromValue(iri_types, str(p))
